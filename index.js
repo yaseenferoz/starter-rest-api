@@ -1,72 +1,138 @@
-const express = require('express')
-const app = express()
-const db = require('@cyclic.sh/dynamodb')
+const express = require('express');
+const mongoose = require('mongoose');
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
+const upload = multer({ dest: 'uploads/' });
 
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+const app = express();
 
-// #############################################################################
-// This configures static hosting for files in /public that have the extensions
-// listed in the array.
-// var options = {
-//   dotfiles: 'ignore',
-//   etag: false,
-//   extensions: ['htm', 'html','css','js','ico','jpg','jpeg','png','svg'],
-//   index: ['index.html'],
-//   maxAge: '1m',
-//   redirect: false
-// }
-// app.use(express.static('public', options))
-// #############################################################################
+// connect to MongoDB
+mongoose.connect('mongodb+srv://yaseenfiroz:6skYUzIiVKOuiF0S@cluster0.dck99ey.mongodb.net/test', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
 
-// Create or Update an item
-app.post('/:col/:key', async (req, res) => {
-  console.log(req.body)
+const db = mongoose.connection;
+db.on('error', console.error.bind(console, 'connection error:'));
+db.once('open', function () {
+  console.log('connected to MongoDB');
+});
 
-  const col = req.params.col
-  const key = req.params.key
-  console.log(`from collection: ${col} delete key: ${key} with params ${JSON.stringify(req.params)}`)
-  const item = await db.collection(col).set(key, req.body)
-  console.log(JSON.stringify(item, null, 2))
-  res.json(item).end()
-})
+// define form schema
+const formSchema = new mongoose.Schema({
+    name: String,
+    email: String,
+    imageUrl: {
+      url: String,
+      public_id: String
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  });
+  
+  formSchema.methods.remove = async function() {
+    return await this.model('Form').deleteOne({ _id: this._id });
+  }
+  
+  const Form = mongoose.model('Form', formSchema);
+  
 
-// Delete an item
-app.delete('/:col/:key', async (req, res) => {
-  const col = req.params.col
-  const key = req.params.key
-  console.log(`from collection: ${col} delete key: ${key} with params ${JSON.stringify(req.params)}`)
-  const item = await db.collection(col).delete(key)
-  console.log(JSON.stringify(item, null, 2))
-  res.json(item).end()
-})
+// configure Cloudinary
+cloudinary.config({
+  cloud_name: 'dczloc2h5',
+  api_key: '825284985619822',
+  api_secret: 'n1g99r-ZnfQcYMleOFwnPYPp5hs',
+});
 
-// Get a single item
-app.get('/:col/:key', async (req, res) => {
-  const col = req.params.col
-  const key = req.params.key
-  console.log(`from collection: ${col} get key: ${key} with params ${JSON.stringify(req.params)}`)
-  const item = await db.collection(col).get(key)
-  console.log(JSON.stringify(item, null, 2))
-  res.json(item).end()
-})
+// define API endpoints
+app.post('/form', upload.single('image'), async (req, res) => {
+  try {
+    const result = await cloudinary.uploader.upload(req.file.path);
 
-// Get a full listing
-app.get('/:col', async (req, res) => {
-  const col = req.params.col
-  console.log(`list collection: ${col} with params: ${JSON.stringify(req.params)}`)
-  const items = await db.collection(col).list()
-  console.log(JSON.stringify(items, null, 2))
-  res.json(items).end()
-})
+    const form = new Form({
+      name: req.body.name,
+      email: req.body.email,
+      imageUrl: {
+        url: result.url,
+        public_id: result.public_id,
+        format: result.format,
+        secure_url: result.secure_url,
+        // other metadata
+      },
+    });
 
-// Catch all handler for all other request.
-app.use('*', (req, res) => {
-  res.json({ msg: 'no route handler found' }).end()
-})
+    const savedForm = await form.save();
 
-// Start the server
-const port = process.env.PORT || 3000
-app.listen(port, () => {
-  console.log(`index.js listening on ${port}`)
-})
+    res.json(savedForm);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server Error');
+  }
+});
+
+app.get('/form/:id', async (req, res) => {
+  try {
+    const form = await Form.findById(req.params.id);
+
+    res.json(form);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server Error');
+  }
+});
+
+app.get('/image/:id', async (req, res) => {
+  try {
+    const form = await Form.findById(req.params.id);
+
+    res.redirect(form.imageUrl.secure_url);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server Error');
+  }
+});
+app.get('/forms', async (req, res) => {
+    try {
+      const forms = await Form.find();
+  
+      res.json(forms);
+    } catch (error) {
+      console.error(error);
+      res.status(500).send('Server Error');
+    }
+  });
+  app.delete('/form/:id', async (req, res) => {
+    try {
+      const formObject = await Form.findById(req.params.id);
+  
+      if (!formObject) {
+        return res.status(404).json({ message: 'Form not found' });
+      }
+  
+      await cloudinary.uploader.destroy(formObject.imageUrl.public_id);
+  
+      const form = new Form({
+        _id: req.params.id,
+        name: formObject.name,
+        email: formObject.email,
+        imageUrl: formObject.imageUrl,
+        createdAt: formObject.createdAt
+      });
+  
+      await form.remove();
+  
+      res.json({ message: 'Form deleted successfully' });
+    } catch (error) {
+      console.error(error);
+      res.status(500).send('Server Error');
+    }
+  });
+  
+  
+  
+
+// start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
